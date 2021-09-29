@@ -1,23 +1,22 @@
 package me.bkrmt.bkcore.request;
 
 import me.bkrmt.bkcore.BkPlugin;
-import me.bkrmt.bkcore.Utils;
-import net.md_5.bungee.api.chat.ClickEvent;
+import me.bkrmt.bkcore.clickablemessage.Button;
+import me.bkrmt.bkcore.clickablemessage.ClickableMessage;
+import me.bkrmt.bkcore.clickablemessage.Hover;
 import net.md_5.bungee.api.chat.ComponentBuilder;
 import net.md_5.bungee.api.chat.HoverEvent;
-import net.md_5.bungee.api.chat.TextComponent;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.scheduler.BukkitRunnable;
 import org.bukkit.scheduler.BukkitTask;
 
-import java.util.Iterator;
 import java.util.List;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentSkipListSet;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class ClickableRequest implements Comparable<ClickableRequest> {
-    private static final ConcurrentSkipListSet<ClickableRequest> clickableRequests = new ConcurrentSkipListSet<>();
+    private static final ConcurrentHashMap<UUID, ClickableRequest> clickableRequests = new ConcurrentHashMap<>();
     private final Player sender;
     private final BkPlugin plugin;
     private final String identifier;
@@ -25,16 +24,14 @@ public class ClickableRequest implements Comparable<ClickableRequest> {
     private BukkitTask timeoutTimer;
     private ExpireRunnable expireRunnable;
     private int timeout;
-    List<String> lines;
-    private TextComponent request;
-    private String[] commands;
-    private String[] buttons;
-    private String[] hovers;
+    private List<String> lines;
+    private final String[] commands;
+    private final String[] buttons;
+    private final String[] hovers;
 
     public ClickableRequest(BkPlugin plugin, String identifier, Player sender, Player target) {
         this.plugin = plugin;
         this.identifier = identifier;
-        request = new TextComponent("");
         this.sender = sender;
         this.target = target;
         lines = null;
@@ -46,9 +43,27 @@ public class ClickableRequest implements Comparable<ClickableRequest> {
     }
 
     public void sendRequest() {
-        buildMessage();
-        target.spigot().sendMessage(request);
-        clickableRequests.add(this);
+        new ClickableMessage(lines)
+                .addReceiver(target)
+                .addButton(
+                    new Button(
+                            buttons[0],
+                            new Hover(HoverEvent.Action.SHOW_TEXT, new ComponentBuilder(hovers[0]).create()),
+                            commands[0],
+                            "{accept-button}"
+                    )
+                )
+                .addButton(
+                    new Button(
+                            buttons[1],
+                            new Hover(HoverEvent.Action.SHOW_TEXT, new ComponentBuilder(hovers[1]).create()),
+                            commands[1],
+                            "{deny-button}"
+                    )
+                )
+                .buildMessage()
+                .sendMessage();
+        clickableRequests.put(sender.getUniqueId(), this);
         if (timeout > 0) {
             ClickableRequest request = this;
             timeoutTimer = new BukkitRunnable() {
@@ -58,77 +73,24 @@ public class ClickableRequest implements Comparable<ClickableRequest> {
                         Bukkit.getScheduler().scheduleSyncDelayedTask(plugin, () -> expireRunnable.run(request));
                     removeInteraction(getIdentifier(), getSender().getUniqueId());
                 }
-            }.runTaskLater(plugin, 20 * timeout);
-        }
-    }
-
-    private void buildMessage() {
-        TextComponent buttonAccept = new TextComponent(buttons[0]);
-        buttonAccept.setClickEvent(new ClickEvent(ClickEvent.Action.RUN_COMMAND, commands[0].contains("/") ? commands[0] : "/" + commands[0]));
-        if (hovers[0] != null && !hovers[0].isEmpty())
-            buttonAccept.setHoverEvent(new HoverEvent(HoverEvent.Action.SHOW_TEXT, new ComponentBuilder(hovers[0]).create()));
-
-        TextComponent buttonDeny = new TextComponent(buttons[1]);
-        buttonDeny.setClickEvent(new ClickEvent(ClickEvent.Action.RUN_COMMAND, commands[1].contains("/") ? commands[1] : "/" + commands[1]));
-        if (hovers[1] != null && !hovers[1].isEmpty())
-            buttonDeny.setHoverEvent(new HoverEvent(HoverEvent.Action.SHOW_TEXT, new ComponentBuilder(hovers[1]).create()));
-
-        Iterator<String> iterator = lines.listIterator();
-        while (iterator.hasNext()) {
-            String line = Utils.translateColor(iterator.next());
-
-            if (line.contains("{accept-button}") || line.contains("{deny-button}")) {
-                String[] parts = line.split(" ");
-                StringBuilder builder = new StringBuilder();
-                for (int c = 0; c < parts.length; c++) {
-                    if (parts[c].equals("{accept-button}")) {
-                        appendRequest(buttonAccept, builder);
-                        builder = new StringBuilder();
-                    } else if (parts[c].equals("{deny-button}")) {
-                        appendRequest(buttonDeny, builder);
-                        builder = new StringBuilder();
-                    } else {
-                        builder.append(Utils.translateColor(parts[c] + " "));
-                    }
-                    if (c == parts.length - 1) {
-                        request.addExtra(builder.toString());
-                        request.addExtra(" ");
-                    }
-                }
-            } else {
-                addLine(line);
-            }
-            if (iterator.hasNext()) request.addExtra("\n");
-        }
-    }
-
-    private void appendRequest(TextComponent button, StringBuilder builder) {
-        request.addExtra(builder.toString());
-        request.addExtra(button);
-        request.addExtra(" ");
-    }
-
-    private void addLine(String line) {
-        if (!line.isEmpty()) {
-            line = line
-                    .replace("{sender}", sender.getName())
-                    .replace("{target}", target.getName())
-                    .replace("{expire}", String.valueOf(timeout));
-            request.addExtra(line);
+            }.runTaskLater(plugin, 20L * timeout);
         }
     }
 
     public static boolean isPlayerInteracting(String identifier, UUID uuid) {
-        for (ClickableRequest request : clickableRequests) {
-            if (request.getIdentifier().equalsIgnoreCase(identifier) && (request.getSender().getUniqueId().equals(uuid) || request.getTarget().getUniqueId().equals(uuid)))
+        for (ClickableRequest request : clickableRequests.values()) {
+            if (request.getIdentifier().equalsIgnoreCase(identifier) &&
+                    (request.getSender().getUniqueId().equals(uuid) || request.getTarget().getUniqueId().equals(uuid))) {
                 return true;
+            }
         }
         return false;
     }
 
     public static ClickableRequest getInteraction(String identifier, UUID uuid) {
-        for (ClickableRequest request : clickableRequests) {
-            if (request.getIdentifier().equalsIgnoreCase(identifier) && (request.getSender().getUniqueId().equals(uuid) || request.getTarget().getUniqueId().equals(uuid))) {
+        for (ClickableRequest request : clickableRequests.values()) {
+            if (request.getIdentifier().equalsIgnoreCase(identifier) &&
+                    (request.getSender().getUniqueId().equals(uuid) || request.getTarget().getUniqueId().equals(uuid))) {
                 return request;
             }
         }
@@ -136,7 +98,7 @@ public class ClickableRequest implements Comparable<ClickableRequest> {
     }
 
     public static ClickableRequest getInteraction(String identifier, UUID senderUuid, UUID targetUuid) {
-        for (ClickableRequest request : clickableRequests) {
+        for (ClickableRequest request : clickableRequests.values()) {
             if (request.getIdentifier().equalsIgnoreCase(identifier) &&
                     (request.getSender().getUniqueId().equals(senderUuid) && request.getTarget().getUniqueId().equals(targetUuid)) ||
                     (request.getTarget().getUniqueId().equals(senderUuid) && request.getSender().getUniqueId().equals(targetUuid))) {
@@ -147,10 +109,11 @@ public class ClickableRequest implements Comparable<ClickableRequest> {
     }
 
     public static void removeInteraction(String identifier, UUID uuid) {
-        for (ClickableRequest request : clickableRequests) {
-            if (request.getIdentifier().equalsIgnoreCase(identifier) && (request.getSender().getUniqueId().equals(uuid) || request.getTarget().getUniqueId().equals(uuid))) {
+        for (ClickableRequest request : clickableRequests.values()) {
+            if (request.getIdentifier().equalsIgnoreCase(identifier) &&
+                    (request.getSender().getUniqueId().equals(uuid) || request.getTarget().getUniqueId().equals(uuid))) {
                 if (request.getTimeoutTimer() != null) request.getTimeoutTimer().cancel();
-                clickableRequests.remove(request);
+                clickableRequests.remove(request.getSender().getUniqueId());
             }
         }
     }
